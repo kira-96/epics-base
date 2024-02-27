@@ -193,6 +193,12 @@ jobs:
             name: "Cross linux-arm gnueabihf"
             cross: linux-arm@arm-linux-gnueabihf
 
+          - os: ubuntu-latest
+            cmp: gcc
+            configuration: default
+            name: "Cross linux-loongarch64"
+            cross: linux-la64
+
     steps:
     - uses: actions/checkout@v3
       with:
