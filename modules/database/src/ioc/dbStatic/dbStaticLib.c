@@ -57,10 +57,10 @@ static char *pNullString = "";
  */
 STATIC_ASSERT(messagesize >= 21);
 
-static char *ppstring[5]={" NPP"," PP"," CA"," CP"," CPP"};
-static char *msstring[4]={" NMS"," MS"," MSI"," MSS"};
+static const char *ppstring[5]={" NPP"," PP"," CA"," CP"," CPP"};
+static const char *msstring[4]={" NMS"," MS"," MSI"," MSS"};
 
-maplinkType pamaplinkType[LINK_NTYPES] = {
+const maplinkType pamaplinkType[LINK_NTYPES] = {
     {"CONSTANT",CONSTANT},
     {"PV_LINK",PV_LINK},
     {"VME_IO",VME_IO},
@@ -89,7 +89,7 @@ static FILE *openOutstream(const char *filename)
     errno = 0;
     stream = fopen(filename,"w");
     if(!stream) {
-        fprintf(stderr,"error opening %s %s\n",filename,strerror(errno));
+        fprintf(stderr,ERL_ERROR " opening %s %s\n",filename,strerror(errno));
         return 0;
     }
     return stream;
@@ -637,7 +637,7 @@ void dbFinishEntry(DBENTRY *pdbentry)
     }
 }
 
-DBENTRY * dbCopyEntry(DBENTRY *pdbentry)
+DBENTRY * dbCopyEntry(const DBENTRY *pdbentry)
 {
     DBENTRY *pnew;
 
@@ -647,7 +647,7 @@ DBENTRY * dbCopyEntry(DBENTRY *pdbentry)
     return(pnew);
 }
 
-void dbCopyEntryContents(DBENTRY *pfrom,DBENTRY *pto)
+void dbCopyEntryContents(const DBENTRY *pfrom,DBENTRY *pto)
 {
     *pto = *pfrom;
     pto->message = NULL;
@@ -1445,6 +1445,7 @@ long dbCreateRecord(DBENTRY *pdbentry,const char *precordName)
     pdbentry->precnode = pNewRecNode;
     ppvd = dbPvdAdd(pdbentry->pdbbase,precordType,pNewRecNode);
     if(!ppvd) {errMessage(-1,"Logic Err: Could not add to PVD");return(-1);}
+    pNewRecNode->order = pdbentry->pdbbase->no_records++;
     return(0);
 }
 
@@ -1652,6 +1653,7 @@ long dbCreateAlias(DBENTRY *pdbentry, const char *alias)
     dbRecordNode *pnewnode;
     DBENTRY tempEntry;
     PVDENTRY *ppvd;
+    long status;
 
     if (!precordType)
         return S_dbLib_recordTypeNotFound;
@@ -1664,9 +1666,10 @@ long dbCreateAlias(DBENTRY *pdbentry, const char *alias)
         return S_dbLib_recNotFound;
 
     dbInitEntry(pdbentry->pdbbase, &tempEntry);
-    if (!dbFindRecord(&tempEntry, alias))
-        return S_dbLib_recExists;
+    status = dbFindRecord(&tempEntry, alias);
     dbFinishEntry(&tempEntry);
+    if (!status)
+        return S_dbLib_recExists;
 
     pnewnode = dbCalloc(1, sizeof(dbRecordNode));
     pnewnode->recordname = epicsStrDup(alias);
@@ -1676,14 +1679,16 @@ long dbCreateAlias(DBENTRY *pdbentry, const char *alias)
     precnode->flags |= DBRN_FLAGS_HASALIAS;
     ellInit(&pnewnode->infoList);
 
-    ellAdd(&precordType->recList, &pnewnode->node);
-    precordType->no_aliases++;
-
     ppvd = dbPvdAdd(pdbentry->pdbbase, precordType, pnewnode);
     if (!ppvd) {
         errMessage(-1, "dbCreateAlias: Add to PVD failed");
+        free(pnewnode);
         return -1;
     }
+
+    ellAdd(&precordType->recList, &pnewnode->node);
+    pnewnode->order = pdbentry->pdbbase->no_records++;
+    precordType->no_aliases++;
 
     return 0;
 }
@@ -2201,11 +2206,11 @@ long dbInitRecordLinks(dbRecordType *rtyp, struct dbCommon *prec)
              */
 
         } else if(dbCanSetLink(plink, &link_info, devsup)!=0) {
-            errlogPrintf("Error: %s.%s: can't initialize link type %d with \"%s\" (type %d)\n",
+            errlogPrintf(ERL_ERROR ": %s.%s: can't initialize link type %d with \"%s\" (type %d)\n",
                          prec->name, pflddes->name, plink->type, plink->text, link_info.ltype);
 
         } else if(dbSetLink(plink, &link_info, devsup)) {
-            errlogPrintf("Error: %s.%s: failed to initialize link type %d with \"%s\" (type %d)\n",
+            errlogPrintf(ERL_ERROR ": %s.%s: failed to initialize link type %d with \"%s\" (type %d)\n",
                          prec->name, pflddes->name, plink->type, plink->text, link_info.ltype);
         }
         free(plink->text);

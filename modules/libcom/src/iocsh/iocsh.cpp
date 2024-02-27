@@ -16,6 +16,7 @@
 #include <vector>
 #include <map>
 #include <string>
+#include <sstream>
 
 #include <stddef.h>
 #include <string.h>
@@ -43,6 +44,7 @@
 
 #if EPICS_COMMANDLINE_LIBRARY == EPICS_COMMANDLINE_LIBRARY_READLINE
 #  include <readline/readline.h>
+#  include <readline/history.h>
 #  define USE_READLINE
 /* libedit also provides readline.h, but isn't fully compatible with
  * GNU readline.  It also doesn't specifically identify itself.
@@ -84,8 +86,9 @@ static struct iocshVariable *iocshVariableHead;
 static char iocshVarID[] = "iocshVar";
 extern "C" { static void varCallFunc(const iocshArgBuf *); }
 static epicsMutexId iocshTableMutex;
-static epicsThreadOnceId iocshOnceId = EPICS_THREAD_ONCE_INIT;
 static epicsThreadPrivateId iocshContextId;
+
+static void iocshInit (void);
 
 /*
  * I/O redirection
@@ -122,20 +125,6 @@ struct iocshRedirect {
 } // namespace
 
 /*
- * Set up module variables
- */
-static void iocshOnce (void *)
-{
-    iocshTableMutex = epicsMutexMustCreate ();
-    iocshContextId = epicsThreadPrivateCreate();
-}
-
-static void iocshInit (void)
-{
-    epicsThreadOnce (&iocshOnceId, iocshOnce, NULL);
-}
-
-/*
  * Lock the table mutex
  */
 static void
@@ -157,19 +146,18 @@ iocshTableUnlock (void)
 /*
  * Register a command
  */
-void epicsStdCall iocshRegister (const iocshFuncDef *piocshFuncDef,
+static
+void iocshRegisterImpl (const iocshFuncDef *piocshFuncDef,
     iocshCallFunc func)
 {
     struct iocshCommand *l, *p, *n;
     int i;
 
-    iocshTableLock ();
     for (l = NULL, p = iocshCommandHead ; p != NULL ; l = p, p = p->next) {
         i = strcmp (piocshFuncDef->name, p->def.pFuncDef->name);
         if (i == 0) {
             p->def.pFuncDef = piocshFuncDef;
             p->def.func = func;
-            iocshTableUnlock ();
             return;
         }
         if (i < 0)
@@ -179,7 +167,6 @@ void epicsStdCall iocshRegister (const iocshFuncDef *piocshFuncDef,
         "iocshRegister");
     if (!registryAdd(iocshCmdID, piocshFuncDef->name, (void *)n)) {
         free (n);
-        iocshTableUnlock ();
         errlogPrintf ("iocshRegister failed to add %s\n", piocshFuncDef->name);
         return;
     }
@@ -193,10 +180,15 @@ void epicsStdCall iocshRegister (const iocshFuncDef *piocshFuncDef,
     }
     n->def.pFuncDef = piocshFuncDef;
     n->def.func = func;
-    iocshTableUnlock ();
 }
 
-
+void epicsStdCall iocshRegister (const iocshFuncDef *piocshFuncDef,
+    iocshCallFunc func)
+{
+    iocshTableLock ();
+    iocshRegisterImpl (piocshFuncDef, func);
+    iocshTableUnlock ();
+}
 /*
  * Retrieves a previously registered function with the given name.
  */
@@ -212,7 +204,7 @@ showError (const char *filename, int lineno, const char *msg, ...)
 
     va_start (ap, msg);
     if (filename)
-        fprintf(epicsGetStderr(), "%s line %d: ", filename, lineno);
+        fprintf(epicsGetStderr(), ERL_ERROR " %s line %d: ", filename, lineno);
     vfprintf (epicsGetStderr(), msg, ap);
     fputc ('\n', epicsGetStderr());
     va_end (ap);
@@ -266,16 +258,16 @@ struct Tokenize {
         int icout = 0;
         bool inword = false;
         bool backslash = false;
-        char quote = EOF;
+        char quote = 0;
 
         for (;;) {
             char c = line[icin++];
             if (c == '\0')
                 break;
 
-            bool sep = (quote == EOF) && !backslash && (strchr (" \t(),\r", c));
+            bool sep = !quote && !backslash && (strchr (" \t(),\r", c));
 
-            if ((quote == EOF) && !backslash) {
+            if (!quote && !backslash) {
                 int redirectFd = 1;
                 if (c == '\\') {
                     backslash = true;
@@ -310,10 +302,10 @@ struct Tokenize {
             }
             if (inword) {
                 if (c == quote) {
-                    quote = EOF;
+                    quote = 0;
                 }
                 else {
-                    if ((quote == EOF) && !backslash) {
+                    if (!quote && !backslash) {
                         if (sep) {
                             inword = false;
                             // this "closes" a sub-string which was previously
@@ -347,7 +339,7 @@ struct Tokenize {
                     else {
                         argv.push_back(line + icout);
                     }
-                    if (quote == EOF)
+                    if (!quote)
                         line[icout++] = c;
                     inword = true;
                 }
@@ -364,7 +356,7 @@ struct Tokenize {
                 showError(filename, lineno, "Illegal redirection.");
             return true;
         }
-        if (quote != EOF) {
+        if (quote) {
             if(noise)
                 showError(filename, lineno, "Unbalanced quote.");
             return true;
@@ -559,7 +551,17 @@ char** iocsh_attempt_completion(const char* word, int start, int end)
                     break;
                 }
             }
-            err = arg-1u >= size_t(def->pFuncDef->nargs);
+            if(arg-1u >= size_t(def->pFuncDef->nargs)) {
+                if(def->pFuncDef->arg
+                   && def->pFuncDef->nargs
+                   && def->pFuncDef->arg[def->pFuncDef->nargs-1u]->type == iocshArgArgv)
+                {
+                    // last argument is variable length
+                    arg = def->pFuncDef->nargs;
+                } else {
+                    err = true;
+                }
+            }
         }
 
         if(!err) {
@@ -633,6 +635,15 @@ struct ReadlineContext {
             rl_completer_quote_characters = (char*)"\"";
             rl_attempted_completion_function = &iocsh_attempt_completion;
             rl_bind_key('\t', rl_complete);
+            compute_hist_file();
+            if(!hist_file.empty()) {
+                if(int err = read_history(hist_file.c_str())) {
+                    if(err!=ENOENT)
+                        fprintf(stderr, ERL_ERROR " %s (%d) loading '%s'\n",
+                                strerror(err), err, hist_file.c_str());
+                }
+                stifle_history(1024); // some limit...
+            }
         }
 #endif
         return context;
@@ -641,6 +652,12 @@ struct ReadlineContext {
     ~ReadlineContext() {
         if(context) {
 #ifdef USE_READLINE
+            if(!hist_file.empty()) {
+                if(int err = write_history(hist_file.c_str())) {
+                    fprintf(stderr, ERL_ERROR " %s (%d) writing '%s'\n",
+                            strerror(err), err, hist_file.c_str());
+                }
+            }
             rl_readline_name = prev_rl_readline_name;
             rl_basic_word_break_characters = prev_rl_basic_word_break_characters;
             rl_completer_word_break_characters = prev_rl_completer_word_break_characters;
@@ -653,6 +670,26 @@ struct ReadlineContext {
             epicsReadlineEnd(context);
         }
     }
+
+#ifdef USE_READLINE
+    std::string hist_file;
+
+    void compute_hist_file() {
+        std::string scratch;
+        if(const char *env = getenv("EPICS_IOCSH_HISTFILE")) {
+            scratch = env;
+        } else {
+            scratch = ".iocsh_history";
+        }
+        const char *home = getenv("HOME");
+        if(home && scratch.size()>=2 && scratch[0]=='~' && scratch[1]=='/') {
+            std::ostringstream strm;
+            strm<<home<<'/'<<scratch.substr(2);
+            scratch = strm.str();
+        }
+        hist_file.swap(scratch);
+    }
+#endif // USE_READLINE
 };
 
 } // namespace
@@ -755,6 +792,13 @@ void epicsStdCall iocshFree(void)
     iocshTableUnlock ();
 }
 
+/*
+ * Parse argument input based on the arg type specified.
+ * It is worth noting that depending on type this argument may 
+ * be defaulted if a value is not specified. For example, a 
+ * double/int with no value will default to 0 which may allow
+ * you to add optional arguments to the end of your argument list.
+ */
 static int
 cvtArg (const char *filename, int lineno, char *arg, iocshArgBuf *argBuf,
     const iocshArg *piocshArg)
@@ -888,15 +932,19 @@ static void helpCallFunc(const iocshArgBuf *args)
                 "Type 'help <command>' to see the arguments of <command>.  eg. 'help db*'\n");
     }
     else {
+        bool firstFunction = true;
         for (int iarg = 1 ; iarg < argc ; iarg++) {
             for (pcmd = iocshCommandHead ; pcmd != NULL ; pcmd = pcmd->next) {
                 piocshFuncDef = pcmd->def.pFuncDef;
                 if (epicsStrGlobMatch(piocshFuncDef->name, argv[iarg]) != 0) {
-                    if(piocshFuncDef->usage) {
-                        fputs("\nUsage: ", epicsGetStdout());
+
+                    if (! firstFunction) {
+                        fprintf(epicsGetStdout(), 
+                            ANSI_UNDERLINE("                                                            \n"));
                     }
+
                     fprintf(epicsGetStdout(),
-                            ANSI_BOLD("%s"),
+                            ANSI_BOLD("\n%s"),
                             piocshFuncDef->name);
 
                     for (int a = 0 ; a < piocshFuncDef->nargs ; a++) {
@@ -909,11 +957,14 @@ static void helpCallFunc(const iocshArgBuf *args)
                             fprintf(epicsGetStdout(), " '%s'", cp);
                         }
                     }
-                    fprintf(epicsGetStdout(),"\n");;
+                    fprintf(epicsGetStdout(),"\n");
                     if(piocshFuncDef->usage) {
                         fprintf(epicsGetStdout(), "\n%s", piocshFuncDef->usage);
                     }
+                    
+                    firstFunction = false;
                 }
+
             }
         }
     }
@@ -1383,12 +1434,12 @@ static void varCallFunc(const iocshArgBuf *args)
                 found = 1;
             }
         if (!found && name != NULL)
-            fprintf(epicsGetStderr(), "No var matching %s found.\n", name);
+            fprintf(epicsGetStderr(), ANSI_RED("No var matching") " %s found.\n", name);
     }
     else {
         v = (iocshVariable *)registryFind(iocshVarID, args[0].sval);
         if (v == NULL) {
-            fprintf(epicsGetStderr(), "Var %s not found.\n", name);
+            fprintf(epicsGetStderr(), "Var %s " ANSI_RED("not found.") "\n", name);
         }
         else {
             varHandler(v->pVarDef, value);
@@ -1441,7 +1492,7 @@ static const iocshFuncDef onFuncDef = {"on", 1, onArgs,
                                        "  continue (default) - Ignores error and continue with next commands.\n"
                                        "  break - Return to caller without executing futher commands.\n"
                                        "  halt - Suspend process.\n"
-                                       "  wait - stall process for [value] seconds, the continue.\n"};
+                                       "  wait - stall process for [value] seconds, then continue.\n"};
 static void onCallFunc(const iocshArgBuf *args)
 {
     iocshContext *context = (iocshContext *) epicsThreadPrivateGet(iocshContextId);
@@ -1513,24 +1564,25 @@ static void exitCallFunc(const iocshArgBuf *)
 {
 }
 
-static void localRegister (void)
+static void iocshOnce (void *)
 {
-    iocshRegister(&commentFuncDef,commentCallFunc);
-    iocshRegister(&exitFuncDef,exitCallFunc);
-    iocshRegister(&helpFuncDef,helpCallFunc);
-    iocshRegister(&iocshCmdFuncDef,iocshCmdCallFunc);
-    iocshRegister(&iocshLoadFuncDef,iocshLoadCallFunc);
-    iocshRegister(&iocshRunFuncDef,iocshRunCallFunc);
-    iocshRegister(&onFuncDef, onCallFunc);
+    iocshTableMutex = epicsMutexMustCreate ();
+    iocshContextId = epicsThreadPrivateCreate();
+    epicsMutexMustLock (iocshTableMutex);
+    iocshRegisterImpl(&commentFuncDef,commentCallFunc);
+    iocshRegisterImpl(&exitFuncDef,exitCallFunc);
+    iocshRegisterImpl(&helpFuncDef,helpCallFunc);
+    iocshRegisterImpl(&iocshCmdFuncDef,iocshCmdCallFunc);
+    iocshRegisterImpl(&iocshLoadFuncDef,iocshLoadCallFunc);
+    iocshRegisterImpl(&iocshRunFuncDef,iocshRunCallFunc);
+    iocshRegisterImpl(&onFuncDef, onCallFunc);
+    iocshTableUnlock();
+}
+
+static void iocshInit (void)
+{
+    static epicsThreadOnceId iocshOnceId = EPICS_THREAD_ONCE_INIT;
+    epicsThreadOnce (&iocshOnceId, iocshOnce, NULL);
 }
 
 } /* extern "C" */
-
-/*
- * Register local commands on application startup
- */
-class IocshRegister {
-  public:
-    IocshRegister() { localRegister(); }
-};
-static IocshRegister iocshRegisterObj;

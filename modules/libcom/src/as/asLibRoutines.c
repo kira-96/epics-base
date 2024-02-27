@@ -29,6 +29,8 @@
 #include "postfix.h"
 #include "asLib.h"
 
+#undef ECHO /* from termios.h */
+
 int asCheckClientIP;
 
 static epicsMutexId asLock;
@@ -174,12 +176,12 @@ long epicsStdCall asInitFile(const char *filename,const char *substitutions)
 
     fp = fopen(filename,"r");
     if(!fp) {
-        errlogPrintf("asInitFile: Can't open file '%s'\n", filename);
+        fprintf(stderr, ERL_ERROR " asInitFile: Can't open file '%s'\n", filename);
         return(S_asLib_badConfig);
     }
     status = asInitFP(fp,substitutions);
     if(fclose(fp)==EOF) {
-        errMessage(0,"asInitFile: fclose failed!");
+        fprintf(stderr, ERL_ERROR " asInitFile: fclose failed!");
         if(!status) status = S_asLib_badConfig;
     }
     return(status);
@@ -357,7 +359,6 @@ void epicsStdCall asPutMemberPvt(ASMEMBERPVT asMemberPvt,void *userPvt)
     if(!asActive) return;
     if(!pasgmember) return;
     pasgmember->userPvt = userPvt;
-    return;
 }
 
 long epicsStdCall asAddClient(ASCLIENTPVT *pasClientPvt,ASMEMBERPVT asMemberPvt,
@@ -365,7 +366,7 @@ long epicsStdCall asAddClient(ASCLIENTPVT *pasClientPvt,ASMEMBERPVT asMemberPvt,
 {
     ASGMEMBER   *pasgmember = asMemberPvt;
     ASGCLIENT   *pasgclient;
-    int         len, i;
+    size_t      len, i;
 
     long        status;
     if(!asActive) return(S_asLib_asNotActive);
@@ -393,7 +394,7 @@ long epicsStdCall asChangeClient(
 {
     ASGCLIENT   *pasgclient = asClientPvt;
     long        status;
-    int         len, i;
+    size_t      len, i;
 
     if(!asActive) return(S_asLib_asNotActive);
     if(!pasgclient) return(S_asLib_badClient);

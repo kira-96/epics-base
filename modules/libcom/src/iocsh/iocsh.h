@@ -66,12 +66,16 @@ typedef enum {
     iocshArgPdbbase,
     iocshArgArgv,
     iocshArgPersistentString,
-    /** Equivalent to iocshArgString with a hint for tab completion as a record name.
-     *  @since UNRELEASED
+    /**
+     * Equivalent to iocshArgString with a hint for tab completion that the
+     * argument is a record name.
+     * @since 7.0.8
      */
     iocshArgStringRecord,
-    /** Equivalent to iocshArgString with a hint for tab completion as a file system path.
-     *  @since UNRELEASED
+    /**
+     * Equivalent to iocshArgString with a hint for tab completion that the
+     * argument is a file system path.
+     * @since 7.0.8
      */
     iocshArgStringPath,
 }iocshArgType;
@@ -287,6 +291,7 @@ LIBCOM_API int epicsStdCall iocshRun(const char *cmd, const char* macros);
  *
  * @param err 0 - success (no op), !=0 - error
  * @return The err argument value.
+ * @since 7.0.3.1
  */
 LIBCOM_API int iocshSetError(int err);
 

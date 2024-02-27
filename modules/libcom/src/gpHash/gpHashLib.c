@@ -56,7 +56,6 @@ void epicsStdCall gphInitPvt(gphPvt **ppvt, int size)
     pgphPvt->paplist = callocMustSucceed(size, sizeof(ELLLIST *), "gphInitPvt");
     pgphPvt->lock = epicsMutexMustCreate();
     *ppvt = pgphPvt;
-    return;
 }
 
 GPHENTRY * epicsStdCall gphFindParse(gphPvt *pgphPvt, const char *name, size_t len, void *pvtid)
@@ -64,7 +63,7 @@ GPHENTRY * epicsStdCall gphFindParse(gphPvt *pgphPvt, const char *name, size_t l
     ELLLIST **paplist;
     ELLLIST *gphlist;
     GPHENTRY *pgphNode;
-    int hash;
+    unsigned hash;
 
     if (pgphPvt == NULL) return NULL;
     paplist = pgphPvt->paplist;
@@ -100,7 +99,7 @@ GPHENTRY * epicsStdCall gphAdd(gphPvt *pgphPvt, const char *name, void *pvtid)
     ELLLIST **paplist;
     ELLLIST *plist;
     GPHENTRY *pgphNode;
-    int hash;
+    unsigned hash;
 
     if (pgphPvt == NULL) return NULL;
     paplist = pgphPvt->paplist;
@@ -145,7 +144,7 @@ void epicsStdCall gphDelete(gphPvt *pgphPvt, const char *name, void *pvtid)
     ELLLIST **paplist;
     ELLLIST *plist = NULL;
     GPHENTRY *pgphNode;
-    int hash;
+    unsigned hash;
 
     if (pgphPvt == NULL) return;
     paplist = pgphPvt->paplist;
@@ -171,7 +170,6 @@ void epicsStdCall gphDelete(gphPvt *pgphPvt, const char *name, void *pvtid)
     }
 
     epicsMutexUnlock(pgphPvt->lock);
-    return;
 }
 
 void epicsStdCall gphFreeMem(gphPvt *pgphPvt)
