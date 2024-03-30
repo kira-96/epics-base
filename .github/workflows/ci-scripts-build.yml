@@ -197,7 +197,7 @@ jobs:
             cmp: gcc
             configuration: default
             name: "Cross linux-loongarch64"
-            cross: linux-la64
+            cross: linux-loong64
 
     steps:
     - uses: actions/checkout@v3
